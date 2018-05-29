@@ -48,6 +48,16 @@ ERROR_CODE_GERRIT_CHANGE_NOT_FOUND          =   3
 ERROR_CODE_REVIEWERS_NOT_ALL_ADDED          =   4
 
 
+class TrimmedGerritChange:
+    def __init__(self, project, branch, change_number, patchset_number, topic,
+        files):
+        self.project = project
+        self.branch = branch
+        self.change_number = change_number
+        self.patchset_number = patchset_number
+        self.topic = topic
+        self.files = files
+
 class GerritRestClient:
     def __init__(self, log_level):
         self.logger = config_logger(__name__, log_level)
@@ -89,59 +99,71 @@ class GerritRestClient:
 
         return json.loads(result[5:])
 
-    def get(self, endpoint):
+    def __get(self, endpoint):
         self.logger.info('request: [%s] %s', 'GET', endpoint)
         return self.__analyseResponse(
             self.session.get(self.apiUrl + endpoint, auth=self.auth))
 
-    def post(self, endpoint, data):
+    def __post(self, endpoint, data):
         self.logger.info('request: [%s] %s', 'POST', endpoint)
         return self.__analyseResponse(
             self.session.post(self.apiUrl + endpoint,
                 data,
                 headers={'content-type': 'application/json'}))
 
-    def put(self, endpoint, data):
+    def __put(self, endpoint, data):
         self.logger.info('request: [%s] %s', 'PUT', endpoint)
         return self.__analyseResponse(
             self.session.put(self.apiUrl + endpoint,
                 data,
                 headers={'content-type': 'application/json'}))
 
-    def delete(self, endpoint):
+    def __delete(self, endpoint):
         self.logger.info('request: [%s] %s', 'DELETE', endpoint)
         return self.__analyseResponse(
             self.session.delete(self.apiUrl + endpoint, auth=self.auth))
 
-    def getServerUrl(self):
-        return self.apiUrl.rstrip('/a')
-
-    def queryChanges(self, query_option, change_number):
+    def __queryChanges(self, query_option, change_number):
         endpoint = '/changes/?q=%s&%s' % (change_number, query_option)
-        change = self.get(endpoint)
+        change = self.__get(endpoint)
         if not change:
             self.logger.error('found no Gerrit change: %d' % change_number)
             raise SystemExit(ERROR_CODE_GERRIT_CHANGE_NOT_FOUND)
 
         return change
 
-    def getFilesContainedInChange(self, change_number):
+    def getServerUrl(self):
+        return self.apiUrl.rstrip('/a')
+
+    def getChange(self, change_number):
         # Get the only change by index 0
         query_option = 'o=CURRENT_REVISION&o=CURRENT_FILES'
-        change = self.queryChanges(query_option, change_number)[0]
-        cur_revision= change['current_revision']
-        files = change['revisions'][cur_revision]['files']
-        result = []
-        for key, value in files.items():
-            result.append(str(key))
-            if value.has_key('old_path'):
-                result.append(str(value['old_path']))
+        change_json = self.__queryChanges(query_option, change_number)[0]
+        self.logger.info('current patchset of change: %d\n%s' % (change_number,
+            json.dumps(change_json, indent=4)))
 
-        return result
+        change = dict(change_json)
+        cur_revision= change['current_revision']
+        files_dict = change['revisions'][cur_revision]['files']
+        files_list = []
+        for key, value in files_dict.items():
+            files_list.append(str(key))
+            if value.has_key('old_path'):
+                files_list.append(str(value['old_path']))
+
+        patchset_number = change['revisions'][cur_revision]['_number']
+        trimmed_change = TrimmedGerritChange(change.get('project'),
+            change.get('branch'),
+            change_number,
+            patchset_number,
+            change.get('topic', None),
+            files_list)
+
+        return trimmed_change
 
     def addReviewer(self, change_number, reviewer_email):
         data = json.dumps({'reviewer': reviewer_email})
-        result = self.post('/changes/%s/reviewers' % change_number, data)
+        result = self.__post('/changes/%s/reviewers' % change_number, data)
         if not result:
             self.logger.error('fail to add reviewer: %s' % reviewer_email)
             return False
@@ -244,7 +266,7 @@ class GerritReviewerAdder:
 
         return True
 
-    def getReviewers(self, project, branch, change_number, topic=None):
+    def getReviewers(self, project, branch, change_number, files=[], topic=None):
         result = []
 
         # Check exception branches
@@ -301,9 +323,6 @@ class GerritReviewerAdder:
 
         self.logger.info('found reviewer config file for project: %s' % project)
 
-        files_list = self.grestClient.getFilesContainedInChange(
-            change_number)
-
         filters_list = self.projectParser.sections()
         for item in filters_list:
             filter_re = string.split(item, 'filter ')[1].strip('"')
@@ -324,7 +343,7 @@ class GerritReviewerAdder:
                     if re.match(filter_branch, branch):
                         self.logger.info('<P> RE pattern to match file: "%s"' %
                             filter_file_re)
-                        for f in files_list:
+                        for f in files:
                             if re.match(filter_file_re, f):
                                 self.logger.info('<P> found matched file: %s' % f)
 
@@ -359,7 +378,7 @@ class GerritReviewerAdder:
                 if 'file:' in item:
                     # Deal with filter "file:..."
                     filter_file_re = filter_re.split('file:')[1]
-                    for f in files_list:
+                    for f in files:
                         if re.match(filter_file_re, f):
                             self.logger.info('<P> found matched file: %s' % f)
                             reviewers = self.projectParser.get(item,
@@ -384,15 +403,20 @@ class GerritReviewerAdder:
 
         return reviewers_list
 
-    def addReviewers(self, project, branch, change_number, patchset,
-            topic=None, force=False, dryrun=False):
-        if not force and patchset != 1:
+    def addReviewers(self, change_number, force=False, dryrun=False):
+        trimmed_change = self.grestClient.getChange(change_number)
+
+        if not force and trimmed_change.patchset_number != 1:
             self.logger.error('under normal mode,'
                 ' no reviewers will be added for patchset: %d' % patchset)
             raise SystemExit(ERROR_CODE_UNDESIRABLE_PATCHSET_FOUND)
 
         allAdded = True
-        reviewers = self.getReviewers(project, branch, change_number, topic)
+        reviewers = self.getReviewers(trimmed_change.project,
+            trimmed_change.branch,
+            trimmed_change.change_number,
+            trimmed_change.files,
+            trimmed_change.topic)
         for reviewer in reviewers:
             if not dryrun:
                 self.logger.info('add reviewer: %s' % reviewer)
@@ -440,32 +464,11 @@ def parse_options():
         choices=['debug', 'info', 'warning', 'error'],
         help='Specify logging level.')
 
-    parser.add_argument('--gerrit-project', dest='gerrit_project',
-        action='store',
-        required=True,
-        help='Specify the name of a Gerrit project.')
-
-    parser.add_argument('--gerrit-branch', dest='gerrit_branch',
-        action='store',
-        required=True,
-        help='Specify the name of a Gerrit branch.')
-
     parser.add_argument('--gerrit-change-number', dest='gerrit_change_number',
         action='store',
         type=int,
         required=True,
         help='Specify the change number of a Gerrit change.')
-
-    parser.add_argument('--gerrit-patchset-number', dest='gerrit_patchset_number',
-        action='store',
-        type=int,
-        required=True,
-        help='Specify the patchset number of Gerrit change.')
-
-    parser.add_argument('--gerrit-topic', dest='gerrit_topic',
-        action='store',
-        required=False,
-        help='Specify the topic of a Gerrit change.')
 
     parser.add_argument('-f', '--force', dest='force',
         action='store_true',
@@ -482,11 +485,7 @@ def parse_options():
 def main(options):
     gerrit = GerritRestClient(options.log_level)
     adder = GerritReviewerAdder(gerrit, options.log_level)
-    adder.addReviewers(options.gerrit_project,
-        options.gerrit_branch,
-        options.gerrit_change_number,
-        options.gerrit_patchset_number,
-        options.gerrit_topic,
+    adder.addReviewers(options.gerrit_change_number,
         options.force,
         options.dryrun)
 
