@@ -20,8 +20,8 @@ as argument.
 
 ### How It Works
 To add reviewers for a Gerrit change, two things must be figured out.
-- To which project the change belongs
-- To which branch the change is uploaded
+- Which project the change belongs to
+- Which branch the change is uploaded to
 
 And as an extension, file contained in a Gerrit change could be used as a
 criterion to decide what files must be reviewed by who.
@@ -35,8 +35,35 @@ criterion to decide what files must be reviewed by who.
 - Branch, or file or their combination can be used to decide reviewers
 
 # Prerequisites
-- Python 2.7
+
+### 1. Python Environment
+- Python 2.7+
 - Python module requests
+
+### 2. Gerrit Version
+- Gerrit 2.14
+> Note
+> 1. Ideally, this script work for Gerrit 2.14+ because Digest Authentication
+>    is removed since Gerrit 2.14.
+> 2. For Gerrit 2.13 and older versions, replace module **HTTPBasicAuth** with
+>    with **HTTPDigestAuth** in the script.
+> 3. Anyway, you should test the script under your own Gerrit version.
+
+### 2. Authentication for Gerrit REST API
+- In the machine which runs this script, an authentication file named
+  **$HOME/.gerrit/grcauth.json** which contains following information is
+  required.
+```json
+{
+  "username": "blankliu",
+  "password": "000000000000000000000000000000000000000000",
+  "canonicalurl": "https://gerrit.example.com"
+}
+```
+> Note
+> 1) Field password is the **HTTP password** of the specified user.
+>    This password can be found via Gerrit "Settings" -> "HTTP Password".
+> 2) Use fild mode 600 for this file so that nobody else can read it.
 
 # How to Understand Reviewer Configuration
 Take the following configuration structure to illustrate how reviewers are

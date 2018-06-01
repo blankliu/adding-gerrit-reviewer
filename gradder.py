@@ -10,7 +10,7 @@ import requests
 import argparse
 
 from ConfigParser       import  SafeConfigParser
-from requests.auth      import  HTTPDigestAuth
+from requests.auth      import  HTTPBasicAuth
 
 # Authentication file for Gerrit REST API
 GERRIT_AUTH_CONFIG_FILE         =   '.gerrit/grcauth.json'
@@ -76,11 +76,14 @@ class GerritRestClient:
             cfg_json['password'])
 
     def __initializeClient(self, server, username, password):
+        '''
+            Gerrit 2.14 requires HTTPBasicAuth for HTTP authentication.
+        '''
         self.apiUrl = server.rstrip('/')
 
         if username and password:
             self.apiUrl = self.apiUrl + '/a'
-            self.auth = HTTPDigestAuth(username, password)
+            self.auth = HTTPBasicAuth(username, password)
         else:
             self.auth = None
 
@@ -127,7 +130,8 @@ class GerritRestClient:
         endpoint = '/changes/?q=%s&%s' % (change_number, query_option)
         change = self.__get(endpoint)
         if not change:
-            self.logger.error('found no Gerrit change: %d' % change_number)
+            self.logger.error('found no Gerrit change: %s/%d' % (
+                self.getServerUrl(), change_number))
             raise SystemExit(ERROR_CODE_GERRIT_CHANGE_NOT_FOUND)
 
         return change
@@ -315,9 +319,10 @@ class GerritReviewerAdder:
         if not self.prepareReviewerParser(project_cfg_file):
             self.logger.info('found no reviewer config file for project: %s' %
                 project)
-            self.logger.warning('no reviewers will be added for change: %s' % 
-                os.path.join(self.grestClient.getServerUrl(), str(
-                    change_number)))
+            if not result:
+                self.logger.warning('no reviewer will be added for change:'
+                    ' %s' % os.path.join(self.grestClient.getServerUrl(),
+                        str(change_number)))
 
             return result
 
